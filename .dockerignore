@@ -1,0 +1,33 @@
+# Everything here is excluded from the build context - the tarball Docker
+# sends to the daemon before building. A fat context makes every build slow
+# and can leak files into the image by accident.
+
+# Version control history: often the largest thing in a repo, never needed
+.git
+.gitignore
+
+# Backups from patch scripts
+*.bak
+*.bak2
+*.bak3
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Run outputs - these belong in a mounted volume, not in the image
+output/
+output_*/
+out_*/
+data/
+
+# Docker's own files: they describe the build, they are not part of it
+Dockerfile*
+docker-compose.yml
+.dockerignore
+
+# Local environment
+.venv/
+venv/
+.env

@@ -27,3 +27,4 @@ output*/
 out_*/
 __pycache__/
 *.pyc
+data/
