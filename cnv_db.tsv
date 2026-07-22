@@ -1,0 +1,7 @@
+assembly	chrom	start	ref_accession	vtype	hgvs	status	notes	end	cnv_type	copy_number	size	raw	hgvs_taslak	validation_status
+GRCh38	chr12	41021576	NC_000012.12	CNV		ok		41040185	copy_number_loss		18600	CNTN1:chr12:41.021.576-41.040.185 del 18.6kb
+	NC_000012.12:g.41021576_41040185del	dogrulanmadi
+GRCh38	chrX	41772635	NC_000023.11	CNV		ok		41895004	copy_number_loss		122369	CASK DEL:chrX:41772635-41895004
+	NC_000023.11:g.41772635_41895004del	dogrulanmadi
+GRCh38	chr12	41021576	NC_000012.12	CNV		ok		41040185	copy_number_loss		18609	chr12:41.021.576-41.040.185del
+	NC_000012.12:g.41021576_41040185del	dogrulanmadi

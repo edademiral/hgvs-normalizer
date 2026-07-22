@@ -1,0 +1,3 @@
+requests
+hgvs
+psycopg2-binary
