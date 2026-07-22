@@ -13,3 +13,7 @@ test_sonuclari/
 *.tsv
 *.pgd.gz
 output_v05/
+*.bak*
+out_mut/
+output_uta/
+output_v05/

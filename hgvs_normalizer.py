@@ -47,6 +47,11 @@ import logging
 import os
 import re
 import subprocess
+import json
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import sys
 from dataclasses import dataclass, field, asdict
 from typing import ClassVar, Dict, List, Optional, Sequence, Tuple
@@ -87,6 +92,11 @@ CHROM_LENGTHS_GRCH38: Dict[str, int] = {
 
 NUCLEOTIDES = frozenset("ACGTN")
 
+MUTALYZER_BASE_URL = "https://mutalyzer.nl/api"
+MUTALYZER_NORMALIZE_PATH = "/normalize/"   # verify against your instance
+MUTALYZER_MIN_INTERVAL = 0.5               # seconds between calls
+
+
 
 def norm_chrom(chrom: Optional[str]) -> Optional[str]:
     """'chr12' / 'Chr 12' / 'MT' -> canonical key ('12', 'X', 'M')."""
@@ -104,6 +114,14 @@ def lookup_accession(chrom: Optional[str]) -> Optional[str]:
 
 def chrom_length(chrom: Optional[str]) -> Optional[int]:
     return CHROM_LENGTHS_GRCH38.get(norm_chrom(chrom) or "")
+
+MITO_ACCESSION = "NC_012920.1"
+
+
+def hgvs_prefix(accession):
+    """Mitochondrial variants take m.; everything else on a chromosome takes g."""
+    return "m." if accession == MITO_ACCESSION else "g."
+
 
 
 # ===================================================================
@@ -621,22 +639,24 @@ class HgvsDraftBuilder:
         if not acc or pos is None:
             return None
 
+        prefix = hgvs_prefix(acc)
         vtype = record.vtype
         if vtype in ("SNV", "INDEL"):
             return self._build_allele(record, acc, pos)
         if vtype == "REPEAT" and record.repeat_unit and record.copy_number is not None:
             end = pos + len(record.repeat_unit) - 1
-            return f"{acc}:g.{pos}_{end}{record.repeat_unit}[{record.copy_number}]"
+            return f"{acc}:{prefix}{pos}_{end}{record.repeat_unit}[{record.copy_number}]"
         if vtype == "CNV" and record.end:
             op = "dup" if record.cnv_type == "copy_number_gain" else "del"
-            return f"{acc}:g.{pos}_{record.end}{op}"
+            return f"{acc}:{prefix}{pos}_{record.end}{op}"
         if vtype == "SV" and record.end:
             op = {"DEL": "del", "DUP": "dup", "INV": "inv"}.get(record.svtype)
             if op:
-                return f"{acc}:g.{pos}_{record.end}{op}"
+                return f"{acc}:{prefix}{pos}_{record.end}{op}"
         return None
 
     def _build_allele(self, record, acc: str, pos: int) -> Optional[str]:
+        prefix = hgvs_prefix(acc)
         ref, alt = (record.ref or ""), (record.alt or "")
         pos, ref, alt = trim_alleles(pos, ref, alt)
 
@@ -650,21 +670,21 @@ class HgvsDraftBuilder:
             if self.fetch:
                 pos, ref = self._shift(record, shift_deletion_3prime, pos, ref)
             end = pos + len(ref) - 1
-            return f"{acc}:g.{pos}del" if len(ref) == 1 else f"{acc}:g.{pos}_{end}del"
+            return f"{acc}:{prefix}{pos}del" if len(ref) == 1 else f"{acc}:{prefix}{pos}_{end}del"
 
         # Pure insertion, placed between pos-1 and pos after trimming
         if alt and not ref:
             anchor = pos - 1
             if self.fetch:
                 anchor, alt = self._shift(record, shift_insertion_3prime, anchor, alt)
-            return f"{acc}:g.{anchor}_{anchor + 1}ins{alt}"
+            return f"{acc}:{prefix}{anchor}_{anchor + 1}ins{alt}"
 
         if len(ref) == 1 and len(alt) == 1:
-            return f"{acc}:g.{pos}{ref}>{alt}"
+            return f"{acc}:{prefix}{pos}{ref}>{alt}"
         if len(ref) == 1:
-            return f"{acc}:g.{pos}delins{alt}"
+            return f"{acc}:{prefix}{pos}delins{alt}"
         end = pos + len(ref) - 1
-        return f"{acc}:g.{pos}_{end}delins{alt}"
+        return f"{acc}:{prefix}{pos}_{end}delins{alt}"
 
     def _shift(self, record, shifter, pos: int, allele: str):
         try:
@@ -838,6 +858,178 @@ class UtaValidator:
             record.notes.append(
                 f"g_to_c failed on {chosen}: {type(exc).__name__}: {str(exc)[:80]}")
 
+
+
+
+class MutalyzerValidator:
+    """
+    Optional validator backed by Mutalyzer 3.
+
+    Works against the public service or a local instance
+    (`pip install mutalyzer-api`, then http://localhost:5000/api).
+    A local instance is preferred for batch work: no network dependency and
+    no load on a shared public server.
+
+    Mutalyzer checks syntax AND the reference base and returns a normalized
+    (3'-shifted) description, so it covers genomic-level validation without
+    needing a transcript database.
+    """
+
+    name = "mutalyzer"
+
+    # Read defensively: field names are tried in order so a schema change
+    # degrades to a clear note instead of a crash.
+    NORMALIZED_KEYS = ("normalized_description", "corrected_description",
+                       "normalized")
+    ERROR_KEYS = ("errors", "error")
+    INFO_KEYS = ("infos", "warnings")
+
+    def __init__(self, base_url=MUTALYZER_BASE_URL, timeout=20.0,
+                 min_interval=MUTALYZER_MIN_INTERVAL,
+                 normalize_path=MUTALYZER_NORMALIZE_PATH):
+        self.base_url = base_url.rstrip("/")
+        self.normalize_path = normalize_path
+        self.timeout = timeout
+        self.min_interval = min_interval
+        self._last_call = 0.0
+        self._cache = {}
+        self._probe()
+        self.data_version = self.base_url
+
+    def _throttle(self):
+        wait = self.min_interval - (time.monotonic() - self._last_call)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call = time.monotonic()
+
+    def _get(self, description):
+        self._throttle()
+        # Mutalyzer 3 takes the description as a PATH segment, not a query
+        # parameter. It contains characters ( : > _ ) that must be encoded.
+        url = (f"{self.base_url}{self.normalize_path}"
+               f"{urllib.parse.quote(description, safe='')}")
+        request = urllib.request.Request(
+            url, headers={"Accept": "application/json",
+                          "User-Agent": f"hgvs_normalizer/{__version__}"})
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # An invalid description comes back as 4xx with a JSON body;
+            # that body is the answer, not a transport failure.
+            body = exc.read().decode("utf-8", errors="replace")
+            try:
+                return json.loads(body)
+            except ValueError:
+                raise RuntimeError(f"HTTP {exc.code}: {body[:120]}") from exc
+
+    def _probe(self):
+        """Fail once at startup rather than on every record."""
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(self.base_url + "/",
+                                       headers={"Accept": "application/json"}),
+                timeout=self.timeout)
+        except urllib.error.HTTPError:
+            pass            # a 4xx still proves the service answers
+        except Exception as exc:
+            raise RuntimeError(
+                f"Mutalyzer unreachable at {self.base_url}: "
+                f"{type(exc).__name__}") from exc
+
+    @staticmethod
+    def _first(payload, keys):
+        for key in keys:
+            if isinstance(payload, dict) and payload.get(key):
+                return payload[key]
+        return None
+
+    @staticmethod
+    def _describe(item):
+        if isinstance(item, dict):
+            return str(item.get("details") or item.get("message")
+                       or item.get("code") or item)
+        return str(item)
+
+    def _normalize(self, description):
+        if description not in self._cache:
+            self._cache[description] = self._get(description)
+        return self._cache[description]
+
+    def validate(self, record):
+        draft = record.hgvs_draft
+        if not draft:
+            record.validation_status = "no_draft"
+            return
+        size = getattr(record, "size", None)
+        if size and size > VALIDATION_MAX_BP:
+            record.validation_status = "skipped_too_large"
+            return
+
+        try:
+            payload = self._normalize(draft)
+        except Exception as exc:                       # noqa: BLE001
+            record.validation_status = "validator_unavailable"
+            record.notes.append(
+                f"mutalyzer error: {type(exc).__name__}: {str(exc)[:100]}")
+            return
+
+        # Mutalyzer 3 nests errors under "custom"; older shapes kept as fallback
+        custom = payload.get("custom") if isinstance(payload, dict) else None
+        errors = ((custom.get("errors") if isinstance(custom, dict) else None)
+                  or self._first(payload, self.ERROR_KEYS))
+        if errors:
+            items = errors if isinstance(errors, list) else [errors]
+            record.validation_status = "failed_validation"
+            record.notes.append("mutalyzer: " + "; ".join(
+                self._describe(item)[:90] for item in items[:2]))
+            return
+
+        normalized = self._first(payload, self.NORMALIZED_KEYS)
+        if not normalized:
+            record.validation_status = "unparseable"
+            keys = sorted(payload) if isinstance(payload, dict) else type(payload).__name__
+            record.notes.append(
+                f"mutalyzer returned no normalized description (keys: {keys})")
+            return
+
+        record.hgvs = str(normalized)
+        record.validation_status = "validated_g"
+        if str(normalized) != draft:
+            record.notes.append(f"mutalyzer rewrote the draft (was {draft})")
+        infos = self._first(payload, self.INFO_KEYS) or []
+        items = infos if isinstance(infos, list) else [infos]
+        for item in items[:2]:
+            record.notes.append("mutalyzer: " + self._describe(item)[:90])
+
+
+class ChainValidator:
+    """
+    Run several validators in order; the first conclusive verdict wins.
+
+    This is what makes the external services genuinely optional: any subset
+    can be supplied, and an inconclusive result (a reference check that
+    passed but proves nothing about transcripts) falls through to the next.
+    """
+
+    CONCLUSIVE = frozenset({
+        "validated_c", "validated_g", "failed_validation",
+        "failed_reference_check", "unparseable", "skipped_too_large",
+    })
+
+    def __init__(self, validators):
+        self.validators = [v for v in validators if v is not None]
+        self.name = "+".join(v.name for v in self.validators) or "disabled"
+        self.data_version = ("; ".join(f"{v.name}={v.data_version}"
+                                       for v in self.validators) or "n/a")
+
+    def validate(self, record):
+        record.validation_status = "not_validated"
+        for validator in self.validators:
+            validator.validate(record)
+            if record.validation_status in self.CONCLUSIVE:
+                record.notes.append(f"verdict from {validator.name}")
+                return
 
 # ===================================================================
 # Orchestration
@@ -1017,10 +1209,10 @@ def load_mane(path: Optional[str]) -> Dict[str, str]:
 # (text, expected_vtype, expected_status, expected_draft_or_None)
 TEST_CASES = [
     ("chr11-45917701 T>C", "SNV", "ok", "NC_000011.10:g.45917701T>C"),
-    ("chrM-8612 T>C", "SNV", "ok", "NC_012920.1:g.8612T>C"),
+    ("chrM-8612 T>C", "SNV", "ok", "NC_012920.1:m.8612T>C"),
     # 1-2 digit coordinates used to be dropped by \d{3,}
-    ("chrM-73 A>G", "SNV", "ok", "NC_012920.1:g.73A>G"),
-    ("chrM-152 T>C", "SNV", "ok", "NC_012920.1:g.152T>C"),
+    ("chrM-73 A>G", "SNV", "ok", "NC_012920.1:m.73A>G"),
+    ("chrM-152 T>C", "SNV", "ok", "NC_012920.1:m.152T>C"),
     # left-anchored VCF alleles must become a real deletion / insertion
     ("chr6-43624673 TGAA>T", "INDEL", "ok", "NC_000006.12:g.43624674_43624676del"),
     ("chr22-50221116 T>TCCG", "INDEL", "ok",
@@ -1089,6 +1281,37 @@ def run_self_test() -> bool:
 # ===================================================================
 # CLI
 # ===================================================================
+
+def build_validator(args, reference, logger):
+    """Assemble whichever validators are available; none of them is required."""
+    stages = []
+
+    if reference:
+        stages.append(FastaValidator(reference))
+
+    if getattr(args, "mutalyzer", None):
+        try:
+            stages.append(MutalyzerValidator(args.mutalyzer))
+            logger.info("Mutalyzer ready: %s", args.mutalyzer)
+        except Exception as exc:                       # noqa: BLE001
+            logger.warning("Mutalyzer unavailable (%s); skipping that stage", exc)
+
+    if args.validate:
+        logger.info("connecting to UTA (first connection can be slow)...")
+        try:
+            stages.append(UtaValidator(mane=load_mane(args.mane)))
+            logger.info("UTA ready")
+        except Exception as exc:                       # noqa: BLE001
+            logger.warning("UTA unavailable (%s); skipping that stage",
+                           type(exc).__name__)
+
+    if not stages:
+        return NullValidator()
+    if len(stages) == 1:
+        return stages[0]
+    return ChainValidator(stages)
+
+
 def main() -> None:
     argp = argparse.ArgumentParser(
         description="Normalize free-text variant descriptions to HGVS")
@@ -1099,6 +1322,10 @@ def main() -> None:
     argp.add_argument("--validate", action="store_true",
                       help="validate against UTA (needs network, slow)")
     argp.add_argument("--mane", help="TSV of gene<TAB>MANE Select transcript")
+    argp.add_argument("--mutalyzer", nargs="?", const=MUTALYZER_BASE_URL,
+                      default=None, metavar="URL",
+                      help="validate with Mutalyzer 3; optionally a base URL "
+                           "(local instance: http://localhost:5000/api)")
     argp.add_argument("--self-test", action="store_true")
     argp.add_argument("--verbose", action="store_true")
     args = argp.parse_args()
@@ -1124,18 +1351,7 @@ def main() -> None:
             logger.warning("FASTA unavailable (%s); no reference checking",
                            type(exc).__name__)
 
-    validator = NullValidator()
-    if args.validate:
-        logger.info("connecting to UTA (first connection can be slow)...")
-        try:
-            validator = UtaValidator(mane=load_mane(args.mane))
-            logger.info("UTA ready: %s", validator.data_version)
-        except Exception as exc:                       # noqa: BLE001
-            logger.warning("UTA unavailable (%s); falling back", type(exc).__name__)
-            if reference:
-                validator = FastaValidator(reference)
-    elif reference:
-        validator = FastaValidator(reference)
+    validator = build_validator(args, reference, logger)
 
     pipeline = NormalizationPipeline(validator=validator, reference=reference)
     records = pipeline.run(args.input)
