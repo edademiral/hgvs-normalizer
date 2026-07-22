@@ -1,0 +1,4 @@
+chr11-45917701 T>C
+chrBozuk-Bilinmiyor A>T
+chr2:987650 delins GCT
+sadece_rastgele_bir_metin_satiri

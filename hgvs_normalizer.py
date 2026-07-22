@@ -69,10 +69,10 @@ class VariantRecord:
     chrom: Optional[str] = None
     start: Optional[int] = None
     accession: Optional[str] = None
-    hgvs: Optional[str] = None            # validated only
-    hgvs_draft: Optional[str] = None      # unvalidated candidate
+    hgvs: Optional[str] = None             # validated only
+    hgvs_draft: Optional[str] = None       # unvalidated candidate
     vtype: Optional[str] = None
-    status: str = "ok"                    # ok | needs_review
+    status: str = "ok"                     # ok | needs_review
     validation_status: str = "not_validated"
     notes: List[str] = field(default_factory=list)
 
@@ -235,7 +235,8 @@ class VariantParser:
     LOSS = re.compile(r"\b(del|deletion|loss)\b|del\b", re.I)
     GAIN = re.compile(r"\b(dup|duplication|gain|amp)\b|dup\b", re.I)
     INVERSION = re.compile(r"\b(inv|inversion)\b", re.I)
-    INSERTION = re.compile(r"\b(ins|insertion)\b", re.I)
+    INSERTION = re.compile(r"\b(?:ins|insertion)\s*([ACGT]+)\b", re.I)
+    DELINS = re.compile(r"\b(?:del|deletion)\s*([ACGT]*)\s*(?:ins|insertion)\s*([ACGT]+)\b", re.I)
     
     # Yeni kural: Yalnızca arkasında tam 3 rakam varsa (veya bu şekilde tekrarlanıyorsa) binlik ayırıcıdır.
     THOUSANDS = re.compile(r"^\d{1,3}(?:[.,]\d{3})+$")
@@ -260,6 +261,8 @@ class VariantParser:
         """Numeric coordinates, with chromosome/bases/sizes removed first."""
         cleaned = self.CHROM.sub(" ", text)
         cleaned = self.SUBSTITUTION.sub(" ", cleaned)
+        cleaned = self.DELINS.sub(" ", cleaned)
+        cleaned = self.INSERTION.sub(" ", cleaned)
         cleaned = self.KILOBASE.sub(" ", cleaned)
         cleaned = self.REPEAT.sub(" ", cleaned)
         out: List[int] = []
@@ -330,6 +333,14 @@ class VariantParser:
             record = (SNVRecord(ref=ref, alt=alt, **common)
                       if len(ref) == 1 and len(alt) == 1
                       else IndelRecord(ref=ref, alt=alt, **common))
+        elif delins := self.DELINS.search(text):
+            deleted_seq = delins.group(1).upper()
+            inserted_seq = delins.group(2).upper()
+            record = IndelRecord(ref=deleted_seq or "N", alt=inserted_seq, **common)
+
+        elif ins_match := self.INSERTION.search(text):
+            inserted_seq = ins_match.group(1).upper()
+            record = IndelRecord(ref="N", alt=inserted_seq, **common)
 
         else:
             if self.LOSS.search(text):
@@ -338,8 +349,6 @@ class VariantParser:
                 direction, svtype = "copy_number_gain", "DUP"
             elif self.INVERSION.search(text):
                 direction, svtype = None, "INV"
-            elif self.INSERTION.search(text):
-                direction, svtype = None, "INS"
             else:
                 record = VariantRecord(**common)
                 record.status = "needs_review"
@@ -453,17 +462,27 @@ class NormalizationPipeline:
         self.parser = parser or VariantParser()
         self.builder = builder or HgvsDraftBuilder()
         self.validator = validator or NullValidator()
+        self.failed_records = []
 
     def run(self, input_path: str) -> List[VariantRecord]:
         records: List[VariantRecord] = []
+        self.failed_records = []
         with open(input_path, encoding="utf-8") as handle:
             for line in handle:
-                record = self.parser.parse(line)
-                if record is None:
+                text = line.strip()
+                if not text or text.startswith("#"):
                     continue
-                if record.status == "ok":
-                    record.hgvs_draft = self.builder.build(record)
-                records.append(record)
+                
+                try:
+                    record = self.parser.parse(line)
+                    if record is None:
+                        continue
+                    if record.status == "ok":
+                        record.hgvs_draft = self.builder.build(record)
+                    records.append(record)
+                except Exception as e:
+                    self.failed_records.append({"raw_line": text, "error": str(e)})
+
         logger.info("parsed %d records", len(records))
 
         for index, record in enumerate(records, 1):
@@ -487,6 +506,13 @@ class NormalizationPipeline:
                 for record in group:
                     writer.writerow(record.as_row())
 
+        if self.failed_records:
+            failed_path = os.path.join(output_dir, "failed_records.tsv")
+            with open(failed_path, "w", encoding="utf-8") as handle:
+                handle.write("raw_line\terror_message\n")
+                for err_rec in self.failed_records:
+                    handle.write(f"{err_rec['raw_line']}\t{err_rec['error']}\n")
+
         manifest = os.path.join(output_dir, "run_manifest.txt")
         with open(manifest, "w", encoding="utf-8") as handle:
             handle.write(f"tool_version: {__version__}\n")
@@ -499,6 +525,8 @@ class NormalizationPipeline:
             handle.write(f"validator_data_version: {self.validator.data_version}\n")
             for key, group in sorted(buckets.items()):
                 handle.write(f"{key}: {len(group)}\n")
+            handle.write(f"FAILED: {len(self.failed_records)}\n")
+            
         return buckets
 
 
@@ -588,6 +616,10 @@ def main() -> None:
             print(f"    {record.raw.strip()[:32]:<32} "
                   f"[{record.validation_status}] "
                   f"{record.hgvs or record.hgvs_draft or ''}")
+            
+    if pipeline.failed_records:
+        print(f"\n  FAILED  ({len(pipeline.failed_records)})  ->  {args.output_dir}/failed_records.tsv")
+        
     print("\n" + "=" * 66)
     print(f"  Provenance: {args.output_dir}/run_manifest.txt")
 

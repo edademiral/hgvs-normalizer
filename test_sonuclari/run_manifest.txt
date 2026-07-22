@@ -1,0 +1,11 @@
+tool_version: 0.5.0
+timestamp: 2026-07-22T13:50:18
+assembly: GRCh38
+sv_min_bp: 50
+cnv_min_bp: 1000
+validator: disabled
+validator_data_version: n/a
+INDEL: 1
+REVIEW: 2
+SNV: 1
+FAILED: 0
