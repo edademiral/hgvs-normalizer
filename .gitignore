@@ -17,3 +17,13 @@ output_v05/
 out_mut/
 output_uta/
 output_v05/
+*.bak*
+output*/
+out_*/
+__pycache__/
+*.pyc
+*.bak*
+output*/
+out_*/
+__pycache__/
+*.pyc
