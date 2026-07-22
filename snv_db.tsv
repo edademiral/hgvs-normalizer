@@ -1,5 +1,0 @@
-assembly	chrom	start	ref_accession	vtype	hgvs	status	notes	ref	alt	raw	hgvs_taslak	validation_status
-GRCh38	chrM	8612	NC_012920.1	SNV		ok		T	C	chrM-8612 T>C
-	NC_012920.1:g.8612T>C	dogrulanmadi
-GRCh38	chr11	45917701	NC_000011.10	SNV		ok		T	C	chr11-45917701 T>C
-	NC_000011.10:g.45917701T>C	dogrulanmadi

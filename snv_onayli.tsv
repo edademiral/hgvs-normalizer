@@ -1,3 +1,0 @@
-chrom	start	end	ref	alt	type	HGVS_KODU	NOTLAR	raw
-chrM	8612		T	C	SNV	NC_012920.1:g.8612T>C	YEREL YEDEK (Baglanti Kurulamadi)	chrM-8612 T>C
-chr11	45917701		T	C	SNV	NC_000011.10:g.45917701T>C	YEREL YEDEK (Baglanti Kurulamadi)	chr11-45917701 T>C
