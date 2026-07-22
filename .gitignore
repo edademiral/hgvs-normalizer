@@ -6,3 +6,9 @@ variants.tsv
 *.tsv
 *.tsv
 uta_20241220.pgd.gz
+__pycache__/
+*.pyc
+output/
+test_sonuclari/
+*.tsv
+*.pgd.gz
