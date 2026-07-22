@@ -19,13 +19,13 @@ guessed at.
 flowchart TD
     A[Free-text input line] --> B{Already valid HGVS?}
     B -- yes --> P[Stage 0: Passthrough]
-    B -- no --> C[Stage 1: Parse<br/>locus, alleles, type]
-    C --> D[Stage 2: Schema check<br/>required fields, bounds]
+    B -- no --> C[Stage 1: Parse - locus, alleles, type]
+    C --> D[Stage 2: Schema check - required fields, bounds]
     D -- incomplete --> R[review.tsv]
-    D -- complete --> E[Stage 3: Draft<br/>allele trimming, optional 3' shift]
+    D -- complete --> E[Stage 3: Draft - allele trimming, optional 3-prime shift]
     P --> F
     E --> F[Stage 4: Validate - OPTIONAL]
-    F --> G[snv.tsv / indel.tsv / sv.tsv<br/>cnv.tsv / repeat.tsv]
+    F --> G[snv.tsv / indel.tsv / sv.tsv / cnv.tsv / repeat.tsv]
     F --> H[run_manifest.txt]
 ```
 
@@ -78,7 +78,7 @@ python hgvs_normalizer.py --self-test
 
 | Flag | Purpose |
 |---|---|
-| `--fasta` | GRCh38 FASTA for reference checking and 3' shifting |
+| `--fasta` | GRCh38 FASTA for reference checking and 3-prime shifting |
 | `--mutalyzer [URL]` | Validate with Mutalyzer 3 |
 | `--validate` | Validate with UTA and project to `c.` |
 | `--mane` | `gene<TAB>transcript` TSV for MANE Select choice |
@@ -96,7 +96,7 @@ tables written by people, converted to HGVS with an explicit audit trail.
 
 ## Requirements
 
-Python 3.9+. Optional: `pyfaidx` for reference checking, `hgvs` + UTA access
+Python 3.9+. Optional: `pyfaidx` for reference checking, `hgvs` and UTA access
 for transcript projection, Docker for the containerised run.
 
 ## License
