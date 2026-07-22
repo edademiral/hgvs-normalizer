@@ -1,3 +1,2 @@
-requests
-hgvs
-psycopg2-binary
+hgvs>=1.5.4
+pyfaidx>=0.8.1

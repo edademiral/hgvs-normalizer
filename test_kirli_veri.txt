@@ -1,0 +1,23 @@
+chr11-45917701 T>C
+chrBozuk-Bilinmiyor A>T
+chr2:987650 delins GCT
+sadece_rastgele_bir_metin_satiri
+chrM-8612 T>C
+chrM-73 A>G
+chr6-43624673 TGAA>T
+chr22-50221116 T>TCCGTGGGTGTTCCACCGTGGCCGGGTGGGAGCCACATCTGACACATTCTCCCCGACCCTGATGCTGGCGTCAGACACGTGC
+CNTN1:chr12:41.021.576-41.040.185 del 18.6kb
+CASK DEL:chrX:41772635-41895004
+chr12:41.021.576-41.040.185del
+chr5-126,489,209-126,759,255
+Mendelian inheritance was suspected in this family
+model-based caller flagged the region
+chr7:100000-200000 loss of function variant
+12:41021576-41040185 del
+HTT chr4:3074877 CAG(42)
+chr4:3074877 (CAG)n expansion
+NM_001173464.2:c.1674-1G>A
+chrM:45917701 T>C
+chr3:1000-5000 inversion
+chr9:100.000-200.000 del 1,5kb
+chr1:9999-10020 del

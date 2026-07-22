@@ -12,3 +12,4 @@ output/
 test_sonuclari/
 *.tsv
 *.pgd.gz
+output_v05/
